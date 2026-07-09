@@ -46,6 +46,9 @@ opening it adds it to the recents.
 | `←` (or `backspace` on an empty filter) | go up one folder |
 | `enter` | open the highlighted subfolder as a workspace |
 | `ctrl+o` | open the folder you're currently in as a workspace |
+| `ctrl+a` | create a new folder here |
+| `ctrl+r` | rename the highlighted folder |
+| `ctrl+d` | delete the highlighted folder (and its contents) — asks to confirm |
 | `esc` | back to the recents list |
 
 ## Install

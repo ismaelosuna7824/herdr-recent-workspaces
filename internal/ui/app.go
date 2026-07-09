@@ -6,6 +6,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -20,6 +21,7 @@ import (
 	"github.com/ismaelosuna7824/herdr-recent-workspaces/internal/finder"
 	"github.com/ismaelosuna7824/herdr-recent-workspaces/internal/herdr"
 	"github.com/ismaelosuna7824/herdr-recent-workspaces/internal/recents"
+	"github.com/ismaelosuna7824/herdr-recent-workspaces/internal/update"
 )
 
 // version is set from main via SetVersion.
@@ -34,6 +36,16 @@ type mode int
 const (
 	modeList   mode = iota // the recents list
 	modeBrowse             // the folder browser
+)
+
+// browsePrompt is the active inline prompt overlaying the folder browser.
+type browsePrompt int
+
+const (
+	promptNone   browsePrompt = iota
+	promptCreate              // typing a name for a new folder
+	promptRename              // typing a new name for the highlighted folder
+	promptDelete              // confirming deletion of the highlighted folder
 )
 
 var (
@@ -69,6 +81,9 @@ type closedMsg struct {
 	label string
 }
 
+// updateMsg carries a newer release tag (empty = up to date).
+type updateMsg struct{ latest string }
+
 // Model is the Bubbletea model for the picker.
 type Model struct {
 	store *recents.Store
@@ -91,12 +106,18 @@ type Model struct {
 	browseNames   []string        // subdirectory names in browseDir
 	browseMatcher *finder.Matcher // over browseNames
 	browseVisible []int           // indices into browseNames, filtered
-	browseCursor  int             // 0 = "open this folder"; k>0 = browseVisible[k-1]
+	browseCursor  int             // index into browseVisible
 	browseOffset  int
+
+	// inline create/rename/delete prompt over the browser
+	browsePromptKind browsePrompt
+	browseInput      string // text being typed for create/rename
+	browseRenameFrom string // original name during a rename
 
 	width, height int
 	status        string
 	statusErr     bool
+	updateLatest  string // newer release tag, if one is available
 	quitting      bool
 }
 
@@ -157,7 +178,19 @@ func (m *Model) filter() {
 }
 
 // Init implements tea.Model.
-func (m Model) Init() tea.Cmd { return nil }
+func (m Model) Init() tea.Cmd { return checkUpdateCmd() }
+
+// checkUpdateCmd asks GitHub for the latest release and reports it if it's newer
+// than the running build. Best-effort: errors just yield "no update".
+func checkUpdateCmd() tea.Cmd {
+	return func() tea.Msg {
+		latest, err := update.Latest(context.Background())
+		if err != nil || !update.IsNewer(latest, version) {
+			return updateMsg{}
+		}
+		return updateMsg{latest: latest}
+	}
+}
 
 // Update implements tea.Model.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -177,6 +210,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.quitting = true
 		return m, tea.Quit
+
+	case updateMsg:
+		m.updateLatest = msg.latest
+		return m, nil
 
 	case closedMsg:
 		if msg.err != nil {
@@ -353,6 +390,10 @@ func (m *Model) filterBrowse() {
 }
 
 func (m Model) handleBrowseKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.browsePromptKind != promptNone {
+		return m.handleBrowsePrompt(msg), nil
+	}
+
 	switch msg.String() {
 	case "ctrl+c":
 		m.quitting = true
@@ -361,6 +402,25 @@ func (m Model) handleBrowseKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.mode = modeList
 		m.status = ""
+		return m, nil
+
+	case "ctrl+a": // new folder in the current directory
+		m.browsePromptKind = promptCreate
+		m.browseInput = ""
+		return m, nil
+
+	case "ctrl+r": // rename the highlighted folder
+		if name, ok := m.browseChild(); ok {
+			m.browsePromptKind = promptRename
+			m.browseRenameFrom = name
+			m.browseInput = name
+		}
+		return m, nil
+
+	case "ctrl+d": // delete the highlighted folder (with confirmation)
+		if _, ok := m.browseChild(); ok {
+			m.browsePromptKind = promptDelete
+		}
 		return m, nil
 
 	case "up", "ctrl+p":
@@ -434,6 +494,136 @@ func (m Model) browseEnterTarget() string {
 	return m.browseDir
 }
 
+// handleBrowsePrompt drives the create/rename/delete overlay.
+func (m Model) handleBrowsePrompt(msg tea.KeyMsg) Model {
+	if m.browsePromptKind == promptDelete {
+		switch msg.String() {
+		case "y", "Y":
+			if name, ok := m.browseChild(); ok {
+				m = m.doDelete(name)
+			}
+		}
+		m.browsePromptKind = promptNone
+		return m
+	}
+
+	// create / rename: a text field
+	switch msg.String() {
+	case "esc", "ctrl+c":
+		m.browsePromptKind = promptNone
+		m.browseInput = ""
+		return m
+
+	case "enter":
+		name := m.browseInput
+		if m.browsePromptKind == promptCreate {
+			m = m.doCreate(name)
+		} else {
+			m = m.doRename(m.browseRenameFrom, name)
+		}
+		m.browsePromptKind = promptNone
+		m.browseInput = ""
+		return m
+
+	case "backspace":
+		if m.browseInput != "" {
+			m.browseInput = m.browseInput[:len(m.browseInput)-1]
+		}
+		return m
+	}
+
+	if len(msg.Runes) > 0 {
+		m.browseInput += string(msg.Runes)
+	}
+	return m
+}
+
+// doCreate makes a new folder in the current directory and selects it.
+func (m Model) doCreate(name string) Model {
+	name = strings.TrimSpace(name)
+	if !validName(name) {
+		m.status, m.statusErr = "invalid folder name", true
+		return m
+	}
+	if err := os.Mkdir(filepath.Join(m.browseDir, name), 0o755); err != nil {
+		m.status, m.statusErr = "create failed: "+err.Error(), true
+		return m
+	}
+	m.status, m.statusErr = "created "+name, false
+	m.loadBrowseDir()
+	return m.selectBrowseName(name)
+}
+
+// doRename renames a subfolder, keeping the recents history consistent.
+func (m Model) doRename(from, to string) Model {
+	to = strings.TrimSpace(to)
+	if !validName(to) {
+		m.status, m.statusErr = "invalid folder name", true
+		return m
+	}
+	if to == from {
+		return m
+	}
+	src := filepath.Join(m.browseDir, from)
+	dst := filepath.Join(m.browseDir, to)
+	if _, err := os.Stat(dst); err == nil {
+		m.status, m.statusErr = to+" already exists", true
+		return m
+	}
+	if err := os.Rename(src, dst); err != nil {
+		m.status, m.statusErr = "rename failed: "+err.Error(), true
+		return m
+	}
+	if m.store.Remove(src) {
+		_ = m.store.Save()
+		m.rebuild()
+	}
+	m.status, m.statusErr = "renamed to "+to, false
+	m.loadBrowseDir()
+	return m.selectBrowseName(to)
+}
+
+// doDelete removes a subfolder and everything inside it.
+func (m Model) doDelete(name string) Model {
+	if !validName(name) {
+		return m
+	}
+	target := filepath.Join(m.browseDir, name)
+	if err := os.RemoveAll(target); err != nil {
+		m.status, m.statusErr = "delete failed: "+err.Error(), true
+		return m
+	}
+	if m.store.Remove(target) {
+		_ = m.store.Save()
+		m.rebuild()
+	}
+	m.status, m.statusErr = "deleted "+name, false
+	m.loadBrowseDir()
+	return m
+}
+
+// selectBrowseName moves the browser cursor onto the folder called name.
+func (m Model) selectBrowseName(name string) Model {
+	for k, idx := range m.browseVisible {
+		if m.browseNames[idx] == name {
+			m.browseCursor = k
+			break
+		}
+	}
+	m.clampOffset(&m.browseCursor, &m.browseOffset, len(m.browseVisible))
+	return m
+}
+
+// validName rejects empty names, "." / "..", and anything with a path separator
+// so operations stay inside the current directory.
+func validName(n string) bool {
+	n = strings.TrimSpace(n)
+	if n == "" || n == "." || n == ".." {
+		return false
+	}
+	return !strings.ContainsAny(n, `/\`)
+}
+
 // ---- shared open path ----
 
 // openPath records target in the history and opens it as a workspace.
@@ -473,6 +663,9 @@ func (m Model) viewList() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("Recent Workspaces"))
 	b.WriteString(footerStyle.Render("  " + version))
+	if m.updateLatest != "" {
+		b.WriteString(openStyle.Render("   ⬆ " + m.updateLatest + " available (reinstall to update)"))
+	}
 	b.WriteByte('\n')
 	b.WriteString(promptStyle.Render("❯ ") + m.query)
 	b.WriteString("\n\n")
@@ -537,7 +730,7 @@ func (m Model) viewBrowse() string {
 	b.WriteByte('\n')
 	b.WriteString(pathStyle.Render(prettyPath(m.browseDir)))
 	b.WriteByte('\n')
-	b.WriteString(promptStyle.Render("❯ ") + m.browseFilter)
+	b.WriteString(m.browsePromptLine())
 	b.WriteString("\n\n")
 
 	rows := m.browseRows()
@@ -547,7 +740,30 @@ func (m Model) viewBrowse() string {
 		b.WriteString(rows[i])
 		b.WriteByte('\n')
 	}
-	return b.String() + m.footer("↑↓ move · →/tab into · ← up · enter open · ctrl+o open this folder · esc back")
+	hints := "↑↓ move · →/tab into · ← up · enter open · ctrl+a new · ctrl+r rename · ctrl+d delete · esc back"
+	if m.browsePromptKind != promptNone {
+		hints = "enter confirm · esc cancel"
+		if m.browsePromptKind == promptDelete {
+			hints = "y delete · any other key cancels"
+		}
+	}
+	return b.String() + m.footer(hints)
+}
+
+// browsePromptLine renders the filter box, or the active create/rename/delete
+// prompt when one is open.
+func (m Model) browsePromptLine() string {
+	switch m.browsePromptKind {
+	case promptCreate:
+		return promptStyle.Render("New folder: ") + m.browseInput + "▏"
+	case promptRename:
+		return promptStyle.Render("Rename "+m.browseRenameFrom+" → ") + m.browseInput + "▏"
+	case promptDelete:
+		name, _ := m.browseChild()
+		return errStyle.Render("Delete " + name + "/ and everything inside? (y/N)")
+	default:
+		return promptStyle.Render("❯ ") + m.browseFilter
+	}
 }
 
 // browseRows builds one row per (filtered) subdirectory of the current folder.
