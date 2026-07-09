@@ -1,0 +1,56 @@
+id = "ismaelosuna.recent-workspaces"
+name = "Recent Workspaces"
+version = "0.1.0"
+min_herdr_version = "0.7.0"
+description = "Open recent — a fuzzy-filterable list of the folders you've opened as Herdr workspaces. Select one to open or re-focus that workspace."
+platforms = ["linux", "macos"]
+
+# At install time, download the prebuilt binary for the user's platform (no Go
+# required). Falls back to `go build` if the download can't happen and Go is
+# available. The binary is self-contained.
+[[build]]
+command = ["sh", "scripts/fetch-or-build.sh"]
+
+# The pane that hosts the picker. The command path is resolved relative to the
+# plugin root; `placement` is the default if the open request doesn't override it.
+[[panes]]
+id = "picker"
+title = "Recent Workspaces"
+placement = "split"
+command = ["./bin/recent-workspaces"]
+
+# User-invokable action that opens the picker pane. Herdr has no declarative
+# "open this pane" field on actions, so this shells out to the Herdr CLI
+# (exposed via HERDR_BIN_PATH) with the pane-open flags: --plugin + --entrypoint
+# select the pane, and it opens as a focused split on the right.
+[[actions]]
+id = "open"
+title = "Open Recent Workspaces"
+contexts = ["workspace"]
+command = [
+  "sh", "-c",
+  "\"${HERDR_BIN_PATH:-herdr}\" plugin pane open --plugin ismaelosuna.recent-workspaces --entrypoint picker --placement split --direction right --focus",
+]
+
+# Same picker, opened in its own tab instead of a side split.
+[[actions]]
+id = "open-tab"
+title = "Open Recent Workspaces (tab)"
+contexts = ["workspace"]
+command = [
+  "sh", "-c",
+  "\"${HERDR_BIN_PATH:-herdr}\" plugin pane open --plugin ismaelosuna.recent-workspaces --entrypoint picker --placement tab --focus",
+]
+
+# Default keybindings (a user's config.toml can override these).
+[[keys.command]]
+key = "prefix+o"
+type = "plugin_action"
+command = "ismaelosuna.recent-workspaces.open"
+description = "open recent workspaces (split)"
+
+[[keys.command]]
+key = "prefix+shift+o"
+type = "plugin_action"
+command = "ismaelosuna.recent-workspaces.open-tab"
+description = "open recent workspaces (tab)"
