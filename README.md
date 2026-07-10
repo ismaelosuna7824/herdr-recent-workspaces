@@ -36,7 +36,9 @@ Recent Workspaces  v0.1.0
 | `esc` / `ctrl+c` | close the picker |
 
 **Folder browser** (`ctrl+o`) — open something that isn't in the history yet;
-opening it adds it to the recents.
+opening it adds it to the recents. It starts at `~/Documents` by default (set
+`HERDR_RW_BROWSE_ROOT` to start elsewhere) so browsing always begins from a
+stable, shallow place instead of wherever the picker was launched.
 
 | Key | Action |
 | --- | --- |

@@ -354,17 +354,36 @@ func (m Model) selected() (item, bool) {
 func (m Model) enterBrowse() Model {
 	m.mode = modeBrowse
 	m.status = ""
-	start := herdr.WorkspaceCwd()
-	if start == "" {
-		if home, err := os.UserHomeDir(); err == nil {
-			start = home
-		} else {
-			start = "."
-		}
-	}
-	m.browseDir = start
+	m.browseDir = browseStartDir()
 	m.loadBrowseDir()
 	return m
+}
+
+// browseStartDir is the directory the folder browser opens at. It defaults to
+// ~/Documents — where projects usually live — so browsing always starts from a
+// stable, shallow place instead of wherever the picker happened to be launched
+// (which, deep in a tree, forces the user to climb back out every time). Set
+// HERDR_RW_BROWSE_ROOT to start somewhere else. Falls back to the home dir, then
+// the current directory.
+func browseStartDir() string {
+	if root := os.Getenv("HERDR_RW_BROWSE_ROOT"); root != "" {
+		if info, err := os.Stat(root); err == nil && info.IsDir() {
+			return filepath.Clean(root)
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if docs := filepath.Join(home, "Documents"); isDir(docs) {
+			return docs
+		}
+		return home
+	}
+	return "."
+}
+
+// isDir reports whether path exists and is a directory.
+func isDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 // loadBrowseDir reads the subdirectories of browseDir and resets the browser.

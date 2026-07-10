@@ -103,29 +103,6 @@ func firstPaneCwd(tabs []struct {
 	return ""
 }
 
-// WorkspaceCwd returns the directory of the workspace the picker was launched
-// from, read from Herdr's injected context JSON (flat "workspace_cwd" key). It
-// is used as a sensible starting point for the folder browser. Returns "" when
-// unavailable.
-func WorkspaceCwd() string {
-	raw := os.Getenv("HERDR_PLUGIN_CONTEXT_JSON")
-	if raw == "" {
-		return ""
-	}
-	var ctx map[string]any
-	if err := json.Unmarshal([]byte(raw), &ctx); err != nil {
-		return ""
-	}
-	for _, key := range []string{"workspace_cwd", "focused_pane_cwd"} {
-		if v, ok := ctx[key].(string); ok {
-			if info, err := os.Stat(v); err == nil && info.IsDir() {
-				return filepath.Clean(v)
-			}
-		}
-	}
-	return ""
-}
-
 // OpenCommand builds the command that opens path. If path is already an open
 // workspace (matched by directory) it focuses that workspace; otherwise it
 // creates a new focused workspace labelled with the folder's name.

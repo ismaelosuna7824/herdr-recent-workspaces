@@ -9,7 +9,7 @@ import (
 )
 
 // browseTree builds a temp directory with known subfolders and points New()'s
-// browser start dir at it via HERDR_PLUGIN_CONTEXT_JSON.
+// browser start dir at it via HERDR_RW_BROWSE_ROOT.
 func browseTree(t *testing.T) string {
 	t.Helper()
 	base := t.TempDir()
@@ -23,7 +23,7 @@ func browseTree(t *testing.T) string {
 	cfg := t.TempDir()
 	t.Setenv("HERDR_PLUGIN_CONFIG_DIR", cfg)
 	t.Setenv("HERDR_SOCKET_PATH", filepath.Join(cfg, "herdr.sock"))
-	t.Setenv("HERDR_PLUGIN_CONTEXT_JSON", `{"workspace_cwd": "`+base+`"}`)
+	t.Setenv("HERDR_RW_BROWSE_ROOT", base)
 	return base
 }
 
@@ -49,14 +49,36 @@ func key(m Model, s string) Model {
 	return next.(Model)
 }
 
-func TestBrowseStartsAtWorkspaceCwdAndListsDirs(t *testing.T) {
+func TestBrowseStartDirDefaultsToDocuments(t *testing.T) {
+	home := t.TempDir()
+	docs := filepath.Join(home, "Documents")
+	if err := os.MkdirAll(docs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("HERDR_RW_BROWSE_ROOT", "") // no override → default kicks in
+
+	if got := browseStartDir(); got != docs {
+		t.Fatalf("want default %q, got %q", docs, got)
+	}
+
+	// With no Documents dir, it falls back to home rather than a deep cwd.
+	if err := os.Remove(docs); err != nil {
+		t.Fatal(err)
+	}
+	if got := browseStartDir(); got != home {
+		t.Fatalf("want home fallback %q, got %q", home, got)
+	}
+}
+
+func TestBrowseStartsAtBrowseRootAndListsDirs(t *testing.T) {
 	base := browseTree(t)
 	m := key(New(), "ctrl+o")
 	if m.mode != modeBrowse {
 		t.Fatal("ctrl+o should enter browse mode")
 	}
 	if m.browseDir != base {
-		t.Fatalf("browser should start at workspace cwd %q, got %q", base, m.browseDir)
+		t.Fatalf("browser should start at browse root %q, got %q", base, m.browseDir)
 	}
 	if len(m.browseNames) != 2 { // alpha, beta
 		t.Fatalf("want 2 subdirs, got %v", m.browseNames)
