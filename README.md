@@ -106,9 +106,17 @@ herdr plugin action invoke open --plugin ismaelosuna.recent-workspaces
   (`HERDR_PLUGIN_CONFIG_DIR`). Newest first, capped at 100, dead folders pruned.
 - **Currently-open workspaces** are read from Herdr's `session.json` (the only
   place a workspace's directory is available — the socket API omits it). They're
-  folded into the list and flagged `● open`.
+  folded into the list and flagged `● open`, and persisted to `recents.json` each
+  time the picker opens so they survive being closed later.
 - **Opening** shells out to the Herdr CLI: `workspace focus <id>` when the folder
   is already an open workspace, otherwise `workspace create --cwd <path> --focus`.
+
+> **Known limitation.** An open workspace is only captured into the history the
+> next time you open the picker — the plugin can't observe Herdr's native
+> **Close** (the socket API fires no such event). So if you open a folder outside
+> the picker and close it via Herdr's menu without opening the picker in between,
+> that folder never reaches the recents. Open the picker once while it's open and
+> it's remembered for good.
 
 ## Development
 

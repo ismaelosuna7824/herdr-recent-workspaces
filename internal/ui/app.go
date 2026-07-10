@@ -132,6 +132,11 @@ func New() Model {
 		store.Seed(w.Cwd, w.Label, now)
 	}
 	store.PruneMissing()
+	// Persist the seeded open workspaces now, while they are still open. Herdr's
+	// native "Close" removes a workspace from session.json without notifying the
+	// plugin, so if we only kept the seed in memory, a folder opened outside the
+	// picker and later closed in Herdr would never make it into the history.
+	_ = store.Save()
 
 	m := Model{store: store, open: open, now: now, mode: modeList}
 	m.rebuild()

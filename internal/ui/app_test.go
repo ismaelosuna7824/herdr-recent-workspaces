@@ -143,6 +143,61 @@ func TestForgetOpenEntryClosesWorkspace(t *testing.T) {
 	}
 }
 
+// TestNewPersistsSeededOpenWorkspace proves that a workspace known only to Herdr
+// (present in session.json, absent from recents.json) is written to recents.json
+// at launch. Without this, closing it via Herdr's native menu — which the plugin
+// cannot observe — would lose it from the history entirely.
+func TestNewPersistsSeededOpenWorkspace(t *testing.T) {
+	base := t.TempDir()
+	openDir := filepath.Join(base, "service")
+	if err := os.MkdirAll(openDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := filepath.Join(base, "cfg")
+	if err := os.MkdirAll(cfg, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	recentsPath := filepath.Join(cfg, "recents.json")
+	// recents.json starts empty — the open workspace is unknown to the plugin.
+	if err := os.WriteFile(recentsPath, []byte("[]"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HERDR_PLUGIN_CONFIG_DIR", cfg)
+
+	sock := filepath.Join(base, "herdr.sock")
+	session := map[string]any{
+		"workspaces": []map[string]any{
+			{"id": "wS", "identity_cwd": openDir, "custom_name": "service"},
+		},
+	}
+	data, _ := json.Marshal(session)
+	if err := os.WriteFile(filepath.Join(base, "session.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HERDR_SOCKET_PATH", sock)
+
+	New() // building the model must persist the seeded open workspace
+
+	raw, err := os.ReadFile(recentsPath)
+	if err != nil {
+		t.Fatalf("recents.json should exist after New(): %v", err)
+	}
+	var entries []struct {
+		Path  string `json:"path"`
+		Label string `json:"label"`
+	}
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("want the open workspace persisted, got %d entries: %s", len(entries), raw)
+	}
+	if entries[0].Path != openDir || entries[0].Label != "service" {
+		t.Fatalf("persisted entry mismatch: %+v", entries[0])
+	}
+}
+
 func TestEscQuits(t *testing.T) {
 	setupEnv(t)
 	m := New()

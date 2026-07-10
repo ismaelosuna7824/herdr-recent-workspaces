@@ -1,6 +1,6 @@
 id = "ismaelosuna.recent-workspaces"
 name = "Recent Workspaces"
-version = "0.1.0"
+version = "0.1.2"
 min_herdr_version = "0.7.0"
 description = "Open recent — a fuzzy-filterable list of the folders you've opened as Herdr workspaces. Select one to open or re-focus that workspace."
 platforms = ["linux", "macos"]
